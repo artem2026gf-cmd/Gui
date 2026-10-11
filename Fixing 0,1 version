@@ -1800,3 +1800,240 @@ if M and M.parentGui then
 		task.delay(120, function() errGui:Destroy() end)
 	end)
 end
+-- A-mod menu | ЧАСТЬ 6: водяной знак (A-mod, FPS, пинг, время с гуи). Тап по нему открывает/закрывает меню, зажать и тянуть = переместить
+local M = _G.AmodM
+if not M then
+	warn("[A-mod] Сначала запусти части 1-5")
+else
+	M.run(function()
+		if not (M.toggle and M.setOpen and M.parentGui) then
+			error("Нужны части 1-5 перед частью 6")
+		end
+		local RunService = game:GetService("RunService")
+		local Stats = game:GetService("Stats")
+		local UserInputService = game:GetService("UserInputService")
+		local C, new, corner, tw, bind = M.C, M.new, M.corner, M.tw, M.bind
+
+		local old = M.parentGui:FindFirstChild("AmodWatermark")
+		if old then old:Destroy() end
+
+		local wmGui = new("ScreenGui", {
+			Name = "AmodWatermark",
+			ResetOnSpawn = false,
+			IgnoreGuiInset = true,
+			DisplayOrder = 1001,
+			ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		}, M.parentGui)
+		M.watermarkGui = wmGui
+
+		-- Плашка (она же кнопка): сама растягивается под содержимое
+		local pill = new("TextButton", {
+			Name = "Pill",
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, 8),
+			Size = UDim2.fromOffset(0, 32),
+			AutomaticSize = Enum.AutomaticSize.X,
+			BackgroundColor3 = Color3.fromRGB(14, 18, 27),
+			BackgroundTransparency = 0.06,
+			BorderSizePixel = 0,
+			Text = "",
+			AutoButtonColor = false,
+		}, wmGui)
+		corner(pill, 5)
+		local pillStroke = M.stroke(pill, C.accent, 1, 0.65)
+		local pillScale = new("UIScale", { Scale = 1 }, pill)
+		new("UIPadding", {
+			PaddingLeft = UDim.new(0, 8),
+			PaddingRight = UDim.new(0, 12),
+		}, pill)
+		new("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			VerticalAlignment = Enum.VerticalAlignment.Center,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Padding = UDim.new(0, 8),
+		}, pill)
+
+		-- Левая акцентная полоса, как в шапке меню
+		local accent = new("Frame", {
+			LayoutOrder = 1,
+			Size = UDim2.fromOffset(3, 18),
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+			BorderSizePixel = 0,
+		}, pill)
+		corner(accent, 2)
+		new("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(66, 104, 192)),
+				ColorSequenceKeypoint.new(0.5, Color3.fromRGB(128, 168, 250)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(66, 104, 192)),
+			}),
+		}, accent)
+
+		-- Точка состояния: серо-синяя пока меню закрыто, зелёная когда открыто
+		local dot = new("Frame", {
+			LayoutOrder = 2,
+			Size = UDim2.fromOffset(7, 7),
+			BackgroundColor3 = C.tabOff,
+			BorderSizePixel = 0,
+		}, pill)
+		corner(dot, 99)
+
+		-- Название с бегущим бликом
+		local title = new("TextLabel", {
+			LayoutOrder = 3,
+			Size = UDim2.fromOffset(0, 20),
+			AutomaticSize = Enum.AutomaticSize.X,
+			BackgroundTransparency = 1,
+			Text = "A-mod",
+			Font = Enum.Font.GothamBold,
+			TextSize = 17,
+			TextColor3 = Color3.fromRGB(255, 255, 255),
+		}, pill)
+		local titleGradient = new("UIGradient", {
+			Offset = Vector2.new(-1, 0),
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(96, 143, 230)),
+				ColorSequenceKeypoint.new(0.35, Color3.fromRGB(104, 150, 240)),
+				ColorSequenceKeypoint.new(0.5, Color3.fromRGB(235, 244, 255)),
+				ColorSequenceKeypoint.new(0.65, Color3.fromRGB(104, 150, 240)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(96, 143, 230)),
+			}),
+		}, title)
+		local shine = game:GetService("TweenService"):Create(titleGradient,
+			TweenInfo.new(2.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+			{ Offset = Vector2.new(1, 0) })
+		shine:Play()
+
+		local function separator(order)
+			new("Frame", {
+				LayoutOrder = order,
+				Size = UDim2.fromOffset(1, 14),
+				BackgroundColor3 = C.line,
+				BorderSizePixel = 0,
+			}, pill)
+		end
+
+		local function statLabel(order, width)
+			return new("TextLabel", {
+				LayoutOrder = order,
+				Size = UDim2.fromOffset(width, 20),
+				BackgroundTransparency = 1,
+				RichText = true,
+				Text = "",
+				Font = M.FONT,
+				TextSize = 14,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}, pill)
+		end
+
+		local function stat(name, value)
+			return string.format('<font color="#566096">%s</font> <font color="#e4e6f2">%s</font>', name, value)
+		end
+
+		separator(4)
+		local fpsLabel = statLabel(5, 62)
+		separator(6)
+		local pingLabel = statLabel(7, 96)
+		separator(8)
+		local timeLabel = statLabel(9, 92)
+
+		-- Пинг до сервера в миллисекундах (тот же, что показывает Roblox)
+		local function readPing()
+			local ok, value = pcall(function()
+				return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+			end)
+			if ok and type(value) == "number" then
+				return tostring(math.floor(value + 0.5)) .. "ms"
+			end
+			return "--"
+		end
+
+		local function formatTime(seconds)
+			local total = math.floor(seconds)
+			local hours = math.floor(total / 3600)
+			local minutes = math.floor((total % 3600) / 60)
+			local secs = total % 60
+			if hours > 0 then
+				return string.format("%d:%02d:%02d", hours, minutes, secs)
+			end
+			return string.format("%02d:%02d", minutes, secs)
+		end
+
+		-- FPS = реальное число кадров за окно времени, обновляется дважды в секунду
+		local startedAt = os.clock()
+		local frames, windowStart = 0, os.clock()
+		fpsLabel.Text = stat("FPS", "...")
+		pingLabel.Text = stat("PING", readPing())
+		timeLabel.Text = stat("TIME", "00:00")
+		bind(RunService.RenderStepped, function()
+			frames = frames + 1
+			local now = os.clock()
+			local elapsed = now - windowStart
+			if elapsed >= 0.5 then
+				fpsLabel.Text = stat("FPS", tostring(math.floor(frames / elapsed + 0.5)))
+				pingLabel.Text = stat("PING", readPing())
+				timeLabel.Text = stat("TIME", formatTime(now - startedAt))
+				frames = 0
+				windowStart = now
+			end
+		end)
+
+		-- Тап открывает/закрывает меню, если палец не двигали; если двигали, то плашка переезжает
+		local pressedInput, dragged, pressPos, startPos
+		bind(pill.InputBegan, function(input)
+			if pressedInput then return end
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				pressedInput = input
+				dragged = false
+				pressPos = input.Position
+				startPos = pill.Position
+				tw(pillScale, 0.1, { Scale = 0.96 }, Enum.EasingStyle.Quad)
+			end
+		end)
+		bind(UserInputService.InputChanged, function(input)
+			if not pressedInput then return end
+			if input == pressedInput or input.UserInputType == Enum.UserInputType.MouseMovement then
+				local delta = input.Position - pressPos
+				if dragged or delta.Magnitude > 8 then
+					dragged = true
+					pill.Position = UDim2.new(
+						startPos.X.Scale, startPos.X.Offset + delta.X,
+						startPos.Y.Scale, startPos.Y.Offset + delta.Y
+					)
+				end
+			end
+		end)
+		bind(UserInputService.InputEnded, function(input)
+			if not pressedInput then return end
+			local isMouse = input.UserInputType == Enum.UserInputType.MouseButton1
+			if input == pressedInput or isMouse then
+				pressedInput = nil
+				tw(pillScale, 0.18, { Scale = 1 }, Enum.EasingStyle.Back)
+				if not dragged then
+					M.toggle()
+				end
+			end
+		end)
+
+		-- Точка и рамка показывают, открыто ли меню
+		local function paintState(open)
+			tw(dot, 0.25, { BackgroundColor3 = open and C.online or C.tabOff }, Enum.EasingStyle.Quad)
+			tw(pillStroke, 0.25, { Transparency = open and 0.3 or 0.65 }, Enum.EasingStyle.Quad)
+		end
+		local baseSetOpen = M.setOpen
+		M.setOpen = function(open)
+			baseSetOpen(open)
+			paintState(open)
+		end
+		paintState(M.isOpen)
+
+		local baseDestroy = M.destroy
+		M.destroy = function()
+			shine:Cancel()
+			pcall(function() wmGui:Destroy() end)
+			baseDestroy()
+		end
+	end)
+end
